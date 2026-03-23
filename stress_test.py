@@ -19,9 +19,11 @@ async def test_agent(agent_id):
     
     latencies = []
     errors = 0
+    node_names = []
     
     async with aiohttp.ClientSession(headers=headers) as session:
         for i in range(REQUESTS_PER_AGENT):
+            name = f"Stress_Node_{agent_id}_{i}"
             payload = {
                 "jsonrpc": "2.0",
                 "id": f"agent_{agent_id}_{i}",
@@ -30,7 +32,7 @@ async def test_agent(agent_id):
                     "name": "create_entities",
                     "arguments": {
                         "entities": [{
-                            "name": f"Stress_Node_{agent_id}_{i}",
+                            "name": name,
                             "entityType": "Node",
                             "observations": [f"Stress test latency check {time.time()}"]
                         }]
@@ -43,15 +45,42 @@ async def test_agent(agent_id):
                 async with session.post(URL, json=payload) as resp:
                     if resp.status == 200:
                         latencies.append(time.perf_counter() - start_time)
+                        node_names.append(name)
                         await resp.json()
                     else:
                         errors += 1
-                        # print(f"Error {resp.status}: {await resp.text()}")
-            except Exception as e:
+            except Exception:
                 errors += 1
-                # print(f"Request failed: {e}")
                 
-    return latencies, errors
+    return latencies, errors, node_names
+
+async def cleanup(all_nodes):
+    if not all_nodes:
+        return
+    
+    print(f"\n🧹 Cleaning up {len(all_nodes)} nodes...")
+    headers = {"Content-Type": "application/json"}
+    if API_KEY:
+        headers["Authorization"] = f"Bearer {API_KEY}"
+        
+    payload = {
+        "jsonrpc": "2.0",
+        "id": "cleanup",
+        "method": "tools/call",
+        "params": {
+            "name": "delete_entities",
+            "arguments": {
+                "entityNames": all_nodes
+            }
+        }
+    }
+    
+    async with aiohttp.ClientSession(headers=headers) as session:
+        async with session.post(URL, json=payload) as resp:
+            if resp.status == 200:
+                print("✅ Cleanup successful")
+            else:
+                print(f"❌ Cleanup failed: {resp.status}")
 
 async def main():
     print(f"🚀 Starting Stress Test: {CONCURRENT_AGENTS} agents, {REQUESTS_PER_AGENT} reqs each")
@@ -65,9 +94,12 @@ async def main():
     
     all_latencies = []
     total_errors = 0
-    for lats, errs in results:
+    all_created_nodes = []
+    
+    for lats, errs, nodes in results:
         all_latencies.extend(lats)
         total_errors += errs
+        all_created_nodes.extend(nodes)
     
     total_reqs = len(all_latencies) + total_errors
     rps = total_reqs / total_time
@@ -84,10 +116,11 @@ async def main():
     if all_latencies:
         print("-" * 40)
         print(f"Avg Latency:    {statistics.mean(all_latencies)*1000:.2f} ms")
-        print(f"Min Latency:    {min(all_latencies)*1000:.2f} ms")
-        print(f"Max Latency:    {max(all_latencies)*1000:.2f} ms")
         print(f"P95 Latency:    {statistics.quantiles(all_latencies, n=20)[18]*1000:.2f} ms")
     print("="*40)
+
+    # Final cleanup
+    await cleanup(all_created_nodes)
 
 if __name__ == "__main__":
     asyncio.run(main())
