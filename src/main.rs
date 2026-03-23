@@ -37,6 +37,14 @@ struct ServerArgs {
     #[arg(short, long, env = "MCP_STORAGE_ROOT", default_value = "storage")]
     root: String,
 
+    /// Directory for guideline documents (effective_work.md, etc.)
+    #[arg(long, env = "MCP_DOCS_DIR", default_value = "docs")]
+    docs_dir: String,
+
+    /// API Key for Bearer authentication (optional)
+    #[arg(long, env = "MCP_API_KEY")]
+    api_key: Option<String>,
+
     /// HTTP server host
     #[arg(long, env = "MCP_HTTP_HOST", default_value = "127.0.0.1")]
     host: String,
@@ -73,6 +81,8 @@ struct AppState {
     registry: Arc<GraphRegistry>,
     sessions: Arc<SessionManager>,
     storage_root: String,
+    docs_dir: String,
+    api_key: Option<String>,
 }
 
 #[tokio::main]
@@ -87,6 +97,14 @@ async fn main() -> anyhow::Result<()> {
     let registry = Arc::new(GraphRegistry::new(&args.root));
     let sessions = Arc::new(SessionManager::new());
     let storage_root = args.root.clone();
+    let docs_dir = args.docs_dir.clone();
+    let api_key = args.api_key.clone();
+
+    if api_key.is_some() {
+        info!("API Key authentication enabled");
+    } else if args.host != "127.0.0.1" && args.host != "localhost" {
+        warn!("Server is bound to {} without API Key! This is insecure.", args.host);
+    }
 
     // Background saver
     let saver_registry = Arc::clone(&registry);
@@ -118,6 +136,8 @@ async fn main() -> anyhow::Result<()> {
             registry: Arc::clone(&registry),
             sessions: Arc::clone(&sessions),
             storage_root: storage_root.clone(),
+            docs_dir: docs_dir.clone(),
+            api_key: api_key.clone(),
         });
 
         // Hardened CORS
@@ -133,6 +153,7 @@ async fn main() -> anyhow::Result<()> {
             .route("/message", post(handle_legacy_message_post))
             .route("/mcp/projects/{pid}/shared", get(handle_streamable_get_shared).post(handle_streamable_post_shared))
             .route("/mcp/projects/{pid}/agents/{aid}", get(handle_streamable_get_agent).post(handle_streamable_post_agent))
+            .layer(axum::middleware::from_fn_with_state(Arc::clone(&app_state), auth_middleware))
             .layer(TraceLayer::new_for_http())
             .layer(cors)
             .with_state(app_state);
@@ -188,7 +209,7 @@ async fn main() -> anyhow::Result<()> {
 
                     let graph = registry.get_or_load(&project_id, scope.clone());
                     debug!(project_id, scope = %scope, "Handling stdio request");
-                    let response_val = process_payload(&graph, payload, &project_id, &scope, None, &storage_root).await;
+                    let response_val = process_payload(&graph, payload, &project_id, &scope, None, &storage_root, &docs_dir).await;
                     
                     if let Some(res) = response_val {
                         let response_json = serde_json::to_string(&res).unwrap_or_default();
@@ -225,6 +246,36 @@ async fn main() -> anyhow::Result<()> {
     cleanup_handle.abort();
     registry.save_all();
     Ok(())
+}
+
+async fn auth_middleware(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Result<impl IntoResponse, StatusCode> {
+    if let Some(ref expected_key) = state.api_key {
+        let auth_header = headers
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|h| h.to_str().ok());
+
+        let authorized = if let Some(auth_str) = auth_header {
+            if auth_str.starts_with("Bearer ") {
+                let token = &auth_str[7..];
+                token == expected_key
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        if !authorized {
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+    }
+
+    Ok(next.run(request).await)
 }
 
 // ==================== Streamable HTTP (2025-11-25) ====================
@@ -308,7 +359,7 @@ async fn handle_streamable_post_logic(
     };
 
     let graph = state.registry.get_or_load(&pid_resolved, scope_resolved.clone());
-    let response_val = process_payload(&graph, payload, &pid_resolved, &scope_resolved, version_ref.clone(), &state.storage_root).await;
+    let response_val = process_payload(&graph, payload, &pid_resolved, &scope_resolved, version_ref.clone(), &state.storage_root, &state.docs_dir).await;
     
     if let Some(sid) = session_id_opt {
         if let Some(session) = state.sessions.get_session(&sid) {
@@ -425,7 +476,7 @@ async fn handle_legacy_message_post(
     };
 
     let graph = state.registry.get_or_load(&project_id, scope.clone());
-    let response_val = process_payload(&graph, payload, &project_id, &scope, version_ref.clone(), &state.storage_root).await;
+    let response_val = process_payload(&graph, payload, &project_id, &scope, version_ref.clone(), &state.storage_root, &state.docs_dir).await;
     
     if let (Some(session), Some(res)) = (session_opt, response_val.clone()) {
         let event = Event::default().data(serde_json::to_string(&res).unwrap_or_default());
@@ -451,18 +502,19 @@ async fn process_payload(
     scope: &MemoryScope,
     session_version: Option<Arc<RwLock<String>>>,
     storage_root: &str,
+    docs_dir: &str,
 ) -> Option<Value> {
     match payload {
         RpcPayload::Single(req) => {
             debug!(project_id = %project_id, scope = %scope, method = %req.method, "Handling RPC request");
-            let response = protocol_handle_request(graph, req, session_version, storage_root).await;
+            let response = protocol_handle_request(graph, req, session_version, storage_root, docs_dir).await;
             response.map(|r| serde_json::to_value(&r).unwrap_or(json!({})))
         }
         RpcPayload::Batch(reqs) => {
             debug!(project_id = %project_id, scope = %scope, batch_size = reqs.len(), "Handling RPC batch request");
             let mut responses = Vec::with_capacity(reqs.len());
             for req in reqs {
-                if let Some(res) = protocol_handle_request(graph, req, session_version.clone(), storage_root).await {
+                if let Some(res) = protocol_handle_request(graph, req, session_version.clone(), storage_root, docs_dir).await {
                     responses.push(res);
                 }
             }

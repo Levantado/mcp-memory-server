@@ -9,6 +9,7 @@ pub async fn protocol_handle_request(
     req: JsonRpcRequest,
     session_version: Option<Arc<RwLock<String>>>,
     storage_root: &str,
+    docs_dir: &str,
 ) -> Option<JsonRpcResponse> {
     let id_opt = req.id.clone();
     let method = req.method.as_str();
@@ -323,11 +324,11 @@ pub async fn protocol_handle_request(
                 if let Some(uri) = params_val.get("uri").and_then(|v| v.as_str()) {
                     let content = match uri {
                         "mcp://resources/guidelines/effective_work" => {
-                            let path = format!("{}/../effective_work.md", storage_root);
+                            let path = format!("{}/effective_work.md", docs_dir);
                             std::fs::read_to_string(path).unwrap_or_else(|_| "Effective work policy not found".to_string())
                         },
                         "mcp://resources/guidelines/agent_usage" => {
-                            let path = format!("{}/../docs/AGENT_GUIDELINES.md", storage_root);
+                            let path = format!("{}/AGENT_GUIDELINES.md", docs_dir);
                             std::fs::read_to_string(path).unwrap_or_else(|_| "Agent guidelines not found".to_string())
                         },
                         u if u.starts_with("mcp://projects/") && u.ends_with("/raw") => {
