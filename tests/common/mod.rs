@@ -2,6 +2,9 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 use std::fs;
 use std::net::TcpListener;
+use std::process::Stdio;
+use std::time::Duration;
+use tokio::process::{Command, Child};
 
 pub struct TestEnv {
     #[allow(dead_code)]
@@ -17,6 +20,7 @@ impl TestEnv {
         let docs_path = temp_dir.path().join("docs");
         
         fs::create_dir_all(&storage_path).unwrap();
+        fs::create_dir_all(storage_path.join("dummy_project")).unwrap();
         fs::create_dir_all(&docs_path).unwrap();
         
         // Create dummy guidelines
@@ -33,5 +37,35 @@ impl TestEnv {
     pub fn get_free_port() -> u16 {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.local_addr().unwrap().port()
+    }
+
+    pub async fn start_server(&self, port: u16, api_key: Option<&str>) -> Child {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_mcp-memory-server-rust"));
+        
+        cmd.arg("--mode").arg("hybrid")
+           .arg("--port").arg(port.to_string())
+           .arg("--root").arg(self.storage_path.to_str().unwrap())
+           .arg("--docs-dir").arg(self.docs_path.to_str().unwrap());
+
+        // Clear inherited env var to prevent accidental auth activation
+        cmd.env_remove("MCP_API_KEY");
+
+        if let Some(key) = api_key {
+            cmd.arg("--api-key").arg(key);
+        }
+
+        cmd.stdout(Stdio::null())
+           .stderr(Stdio::null());
+
+        let mut child = cmd.spawn().expect("Failed to start server");
+        
+        // Wait for server to boot
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        
+        if let Ok(Some(status)) = child.try_wait() {
+            panic!("Server died immediately with status: {}", status);
+        }
+
+        child
     }
 }

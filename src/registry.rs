@@ -23,27 +23,23 @@ impl GraphRegistry {
     pub fn get_or_load(&self, project_id: &str, scope: MemoryScope) -> Arc<MemoryGraph> {
         let key = (project_id.to_string(), scope.clone());
         
-        if let Some(graph) = self.graphs.get(&key) {
-            return Arc::clone(graph.value());
-        }
+        self.graphs.entry(key).or_insert_with(|| {
+            // Lazy load
+            let graph_path = self.resolve_path(project_id, &scope);
+            
+            let graph = match storage::load_from_file(&graph_path) {
+                Ok(g) => {
+                    info!("Loaded graph for project: {}, scope: {} from {:?}", project_id, scope, graph_path);
+                    g
+                }
+                Err(e) => {
+                    info!("Creating new graph for project: {}, scope: {} (Failed to load: {})", project_id, scope, e);
+                    MemoryGraph::new()
+                }
+            };
 
-        // Lazy load
-        let graph_path = self.resolve_path(project_id, &scope);
-        
-        let graph = match storage::load_from_file(&graph_path) {
-            Ok(g) => {
-                info!("Loaded graph for project: {}, scope: {} from {:?}", project_id, scope, graph_path);
-                g
-            }
-            Err(e) => {
-                info!("Creating new graph for project: {}, scope: {} (Failed to load: {})", project_id, scope, e);
-                MemoryGraph::new()
-            }
-        };
-
-        let graph_arc = Arc::new(graph);
-        self.graphs.insert(key, Arc::clone(&graph_arc));
-        graph_arc
+            Arc::new(graph)
+        }).value().clone()
     }
 
     fn resolve_path(&self, project_id: &str, scope: &MemoryScope) -> PathBuf {
