@@ -68,6 +68,10 @@ struct ServerArgs {
     /// Save interval in seconds
     #[arg(short, long, default_value_t = 30)]
     interval: u64,
+
+    /// CORS allowed origins (comma-separated, default is *)
+    #[arg(long, env = "MCP_CORS_ORIGINS", default_value = "*")]
+    cors_allowed_origins: String,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug, PartialEq)]
@@ -140,9 +144,8 @@ async fn main() -> anyhow::Result<()> {
             api_key: api_key.clone(),
         });
 
-        // Hardened CORS
-        let cors = CorsLayer::new()
-            .allow_origin(Any)
+        // Configurable CORS
+        let mut cors = CorsLayer::new()
             .allow_methods(Any)
             .allow_headers([
                 axum::http::header::AUTHORIZATION,
@@ -151,6 +154,16 @@ async fn main() -> anyhow::Result<()> {
                 axum::http::HeaderName::from_static("mcp-protocol-version"),
             ])
             .expose_headers(Any);
+
+        if args.cors_allowed_origins == "*" {
+            cors = cors.allow_origin(Any);
+        } else {
+            for origin in args.cors_allowed_origins.split(',') {
+                if let Ok(header_val) = origin.trim().parse::<axum::http::HeaderValue>() {
+                    cors = cors.allow_origin(header_val);
+                }
+            }
+        }
 
         let app = Router::new()
             .route("/sse/projects/{pid}/shared", get(handle_legacy_sse_shared))
