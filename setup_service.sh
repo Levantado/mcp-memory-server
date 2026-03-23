@@ -16,6 +16,11 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
+# Установка mcp-init хелпера
+echo -e "${BLUE}Installing mcp-init helper to ~/.cargo/bin...${NC}"
+cp mcp-init.sh "$HOME/.cargo/bin/mcp-init"
+chmod +x "$HOME/.cargo/bin/mcp-init"
+
 # 2. Подготовка директорий
 echo -e "${BLUE}Preparing storage and docs directories...${NC}"
 STORAGE_ROOT="$HOME/.mcp-memory"
