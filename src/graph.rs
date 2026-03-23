@@ -229,4 +229,51 @@ mod tests {
         assert_eq!(entities.len(), 1);
         assert_eq!(entities[0].name.as_ref(), "Rust");
     }
+
+    #[test]
+    fn test_cascade_delete() {
+        let graph = MemoryGraph::new();
+        graph.create_entities(vec![
+            Entity { name: Arc::from("A"), entity_type: Arc::from("T"), observations: vec![] },
+            Entity { name: Arc::from("B"), entity_type: Arc::from("T"), observations: vec![] },
+        ]);
+        graph.create_relations(vec![
+            Relation { from: Arc::from("A"), to: Arc::from("B"), relation_type: Arc::from("link") }
+        ]);
+        
+        assert_eq!(graph.relations.len(), 1);
+        
+        // Delete A, should remove relation A->B
+        graph.delete_entities(vec!["A".to_string()]);
+        assert_eq!(graph.entities.len(), 1);
+        assert_eq!(graph.relations.len(), 0);
+    }
+
+    #[test]
+    fn test_entity_merge() {
+        let graph = MemoryGraph::new();
+        graph.create_entities(vec![
+            Entity { name: Arc::from("Rust"), entity_type: Arc::from("Lang"), observations: vec!["Fast".into()] }
+        ]);
+        
+        // Add same entity with new observation
+        graph.create_entities(vec![
+            Entity { name: Arc::from("Rust"), entity_type: Arc::from("Lang"), observations: vec!["Safe".into()] }
+        ]);
+        
+        let entities = graph.get_entities(vec!["Rust".to_string()]);
+        assert_eq!(entities[0].observations.len(), 2);
+        assert!(entities[0].observations.contains(&"Fast".to_string()));
+        assert!(entities[0].observations.contains(&"Safe".to_string()));
+    }
+
+    #[test]
+    fn test_invalid_relation_prevention() {
+        let graph = MemoryGraph::new();
+        // Try to create relation between non-existent nodes
+        graph.create_relations(vec![
+            Relation { from: Arc::from("Ghost1"), to: Arc::from("Ghost2"), relation_type: Arc::from("haunt") }
+        ]);
+        assert_eq!(graph.relations.len(), 0);
+    }
 }

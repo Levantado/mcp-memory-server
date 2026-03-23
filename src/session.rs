@@ -65,6 +65,11 @@ impl SessionManager {
         }
     }
 
+    #[allow(dead_code)]
+    pub fn remove_session(&self, session_id: &str) {
+        self.sessions.remove(session_id);
+    }
+
     /// Removes sessions that haven't been active for longer than `max_idle`
     pub fn cleanup_inactive(&self, max_idle: Duration) -> usize {
         let now = Instant::now();
@@ -80,5 +85,33 @@ impl SessionManager {
             }
         });
         count
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn test_session_lifecycle() {
+        let manager = SessionManager::new();
+        let (id, _) = manager.create_session("test_proj".into(), MemoryScope::Shared);
+        
+        assert!(manager.get_session(&id).is_some());
+        
+        manager.remove_session(&id);
+        assert!(manager.get_session(&id).is_none());
+    }
+
+    #[test]
+    fn test_session_cleanup() {
+        let manager = SessionManager::new();
+        let (id, _) = manager.create_session("test_proj".into(), MemoryScope::Shared);
+        
+        // Immediately cleanup with 0 duration - should remove everything
+        let cleaned = manager.cleanup_inactive(Duration::from_secs(0));
+        assert_eq!(cleaned, 1);
+        assert!(manager.get_session(&id).is_none());
     }
 }
