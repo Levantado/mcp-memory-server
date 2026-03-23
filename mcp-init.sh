@@ -32,13 +32,11 @@ cat <<EOF > .gemini/settings.json
   "mcpServers": {
     "mcp-memory-shared": {
       "url": "$SERVER_URL/mcp/projects/$PROJECT_ID/shared",
-      "type": "sse",
       $AUTH_HEADER
       "trust": true
     },
     "mcp-memory-private": {
       "url": "$SERVER_URL/mcp/projects/$PROJECT_ID/agents/$AGENT_ID",
-      "type": "sse",
       $AUTH_HEADER
       "trust": true
     }
