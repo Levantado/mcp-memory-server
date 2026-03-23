@@ -31,6 +31,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .pool_max_idle_per_host(CONCURRENT_AGENTS)
         .build()?;
 
+    // Pre-flight check
+    println!("🔍 Checking server reachability...");
+    match client.get(&url).send().await {
+        Ok(r) if r.status().is_success() => println!("✅ Server is reachable"),
+        Ok(r) => {
+            eprintln!("❌ Server returned error: {}. Check your MCP_API_KEY.", r.status());
+            return Ok(());
+        }
+        Err(e) => {
+            eprintln!("❌ Could not reach server: {}. Make sure it is running on 127.0.0.1:3000", e);
+            return Ok(());
+        }
+    }
+
     let mut tasks = Vec::with_capacity(CONCURRENT_AGENTS);
     let start_total = Instant::now();
 
