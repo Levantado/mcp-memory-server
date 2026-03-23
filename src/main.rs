@@ -367,7 +367,7 @@ async fn handle_streamable_post_logic(
     info!("Streamable POST request received. Session: {:?}, Project: {}, Scope: {}", session_id_opt, project_id, scope);
     
     let (pid_resolved, scope_resolved, version_ref): (String, MemoryScope, Option<Arc<RwLock<String>>>) = if let Some(ref sid) = session_id_opt {
-        if let Some(session) = state.sessions.get_session(&sid) {
+        if let Some(session) = state.sessions.get_session(sid.as_str()) {
             (session.project_id.clone(), session.scope.clone(), Some(session.protocol_version))
         } else {
             warn!("Session {} not found, using path params", sid);
@@ -381,7 +381,7 @@ async fn handle_streamable_post_logic(
     let response_val = process_payload(&graph, payload, &pid_resolved, &scope_resolved, version_ref.clone(), &state.storage_root, &state.docs_dir).await;
     
     if let Some(sid) = session_id_opt {
-        if let Some(session) = state.sessions.get_session(&sid) {
+        if let Some(session) = state.sessions.get_session(sid.as_str()) {
             if let Some(ref res) = response_val {
                 let event = Event::default().data(serde_json::to_string(res).unwrap_or_default());
                 let _ = session.sender.send(Ok::<Event, axum::Error>(event)).await;

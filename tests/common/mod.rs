@@ -3,6 +3,7 @@ use tempfile::TempDir;
 use std::fs;
 
 pub struct TestEnv {
+    #[allow(dead_code)]
     pub temp_dir: TempDir,
     pub storage_path: PathBuf,
     pub docs_path: PathBuf,

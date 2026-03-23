@@ -122,7 +122,7 @@ async fn test_resource_reading() {
         .and_then(|c| c.get(0))
         .and_then(|c| c.get("text"))
         .and_then(|t| t.as_str())
-        .expect(&format!("Expected text content, got: {}", body));
+        .unwrap_or_else(|| panic!("Expected text content, got: {}", body));
     
     assert_eq!(text_content, "test policy"); // Matches what we wrote in TestEnv
 
