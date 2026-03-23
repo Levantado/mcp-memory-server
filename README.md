@@ -57,7 +57,7 @@ A high-performance implementation of the **Model Context Protocol (MCP)** Knowle
 - **Stdio:** Standard mode for local integration.
 
 ## 📊 Performance
-The server includes a comprehensive stress test suite. In our benchmarks, it handles **5000+ RPS** with sub-5ms latency on standard hardware.
+The server includes a comprehensive stress test suite. In our benchmarks, it handles **4000+ RPS** with **sub-5ms** average latency on standard hardware.
 
 Run benchmarks:
 ```bash
