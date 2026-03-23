@@ -158,11 +158,11 @@ async fn main() -> anyhow::Result<()> {
         if args.cors_allowed_origins == "*" {
             cors = cors.allow_origin(Any);
         } else {
-            for origin in args.cors_allowed_origins.split(',') {
-                if let Ok(header_val) = origin.trim().parse::<axum::http::HeaderValue>() {
-                    cors = cors.allow_origin(header_val);
-                }
-            }
+            let origins: Vec<axum::http::HeaderValue> = args.cors_allowed_origins
+                .split(',')
+                .filter_map(|s| s.trim().parse().ok())
+                .collect();
+            cors = cors.allow_origin(origins);
         }
 
         let app = Router::new()
