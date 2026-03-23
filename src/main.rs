@@ -144,7 +144,12 @@ async fn main() -> anyhow::Result<()> {
         let cors = CorsLayer::new()
             .allow_origin(Any)
             .allow_methods(Any)
-            .allow_headers(Any)
+            .allow_headers([
+                axum::http::header::AUTHORIZATION,
+                axum::http::header::CONTENT_TYPE,
+                axum::http::HeaderName::from_static("mcp-session-id"),
+                axum::http::HeaderName::from_static("mcp-protocol-version"),
+            ])
             .expose_headers(Any);
 
         let app = Router::new()
@@ -260,8 +265,7 @@ async fn auth_middleware(
             .and_then(|h| h.to_str().ok());
 
         let authorized = if let Some(auth_str) = auth_header {
-            if auth_str.starts_with("Bearer ") {
-                let token = &auth_str[7..];
+            if let Some(token) = auth_str.strip_prefix("Bearer ") {
                 token == expected_key
             } else {
                 false

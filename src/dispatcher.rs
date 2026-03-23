@@ -325,7 +325,13 @@ pub async fn protocol_handle_request(
                     let content = match uri {
                         "mcp://resources/guidelines/effective_work" => {
                             let path = format!("{}/effective_work.md", docs_dir);
-                            std::fs::read_to_string(path).unwrap_or_else(|_| "Effective work policy not found".to_string())
+                            if std::path::Path::new(&path).exists() {
+                                std::fs::read_to_string(path).unwrap_or_else(|_| "Error reading policy".to_string())
+                            } else {
+                                // Fallback to parent dir (common in dev setup)
+                                let fallback = format!("{}/../effective_work.md", docs_dir);
+                                std::fs::read_to_string(fallback).unwrap_or_else(|_| "Effective work policy not found".to_string())
+                            }
                         },
                         "mcp://resources/guidelines/agent_usage" => {
                             let path = format!("{}/AGENT_GUIDELINES.md", docs_dir);
