@@ -81,7 +81,7 @@ enum Mode {
     Hybrid,
 }
 
-struct AppState {
+pub struct AppState {
     registry: Arc<GraphRegistry>,
     sessions: Arc<SessionManager>,
     storage_root: String,
@@ -144,37 +144,7 @@ async fn main() -> anyhow::Result<()> {
             api_key: api_key.clone(),
         });
 
-        // Configurable CORS
-        let mut cors = CorsLayer::new()
-            .allow_methods(Any)
-            .allow_headers([
-                axum::http::header::AUTHORIZATION,
-                axum::http::header::CONTENT_TYPE,
-                axum::http::HeaderName::from_static("mcp-session-id"),
-                axum::http::HeaderName::from_static("mcp-protocol-version"),
-            ])
-            .expose_headers(Any);
-
-        if args.cors_allowed_origins == "*" {
-            cors = cors.allow_origin(Any);
-        } else {
-            let origins: Vec<axum::http::HeaderValue> = args.cors_allowed_origins
-                .split(',')
-                .filter_map(|s| s.trim().parse().ok())
-                .collect();
-            cors = cors.allow_origin(origins);
-        }
-
-        let app = Router::new()
-            .route("/sse/projects/{pid}/shared", get(handle_legacy_sse_shared))
-            .route("/sse/projects/{pid}/agents/{aid}", get(handle_legacy_sse_agent))
-            .route("/message", post(handle_legacy_message_post))
-            .route("/mcp/projects/{pid}/shared", get(handle_streamable_get_shared).post(handle_streamable_post_shared))
-            .route("/mcp/projects/{pid}/agents/{aid}", get(handle_streamable_get_agent).post(handle_streamable_post_agent))
-            .layer(axum::middleware::from_fn_with_state(Arc::clone(&app_state), auth_middleware))
-            .layer(TraceLayer::new_for_http())
-            .layer(cors)
-            .with_state(app_state);
+        let app = create_app(Arc::clone(&app_state), &args.cors_allowed_origins);
 
         let listener = tokio::net::TcpListener::bind(format!("{}:{}", args.host, args.port)).await?;
         info!("HTTP server listening on {}", listener.local_addr()?);
@@ -203,8 +173,6 @@ async fn main() -> anyhow::Result<()> {
             match reader.read_line(&mut line).await {
                 Ok(0) => {
                     if args.mode == Mode::Hybrid {
-                        // In hybrid mode, if stdin is closed (e.g. background service), 
-                        // we stay alive for HTTP requests.
                         debug!("Stdio reach EOF, but keeping HTTP server alive in Hybrid mode");
                         tokio::select! {
                             _ = tokio::signal::ctrl_c() => info!("Shutdown signal received"),
@@ -264,6 +232,40 @@ async fn main() -> anyhow::Result<()> {
     cleanup_handle.abort();
     registry.save_all();
     Ok(())
+}
+
+pub fn create_app(state: Arc<AppState>, cors_origins: &str) -> Router {
+    // Configurable CORS
+    let mut cors = CorsLayer::new()
+        .allow_methods(Any)
+        .allow_headers([
+            axum::http::header::AUTHORIZATION,
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderName::from_static("mcp-session-id"),
+            axum::http::HeaderName::from_static("mcp-protocol-version"),
+        ])
+        .expose_headers(Any);
+
+    if cors_origins == "*" {
+        cors = cors.allow_origin(Any);
+    } else {
+        let origins: Vec<axum::http::HeaderValue> = cors_origins
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        cors = cors.allow_origin(origins);
+    }
+
+    Router::new()
+        .route("/sse/projects/{pid}/shared", get(handle_legacy_sse_shared))
+        .route("/sse/projects/{pid}/agents/{aid}", get(handle_legacy_sse_agent))
+        .route("/message", post(handle_legacy_message_post))
+        .route("/mcp/projects/{pid}/shared", get(handle_streamable_get_shared).post(handle_streamable_post_shared))
+        .route("/mcp/projects/{pid}/agents/{aid}", get(handle_streamable_get_agent).post(handle_streamable_post_agent))
+        .layer(axum::middleware::from_fn_with_state(Arc::clone(&state), auth_middleware))
+        .layer(TraceLayer::new_for_http())
+        .layer(cors)
+        .with_state(state)
 }
 
 async fn auth_middleware(
@@ -365,7 +367,7 @@ async fn handle_streamable_post_logic(
     info!("Streamable POST request received. Session: {:?}, Project: {}, Scope: {}", session_id_opt, project_id, scope);
     
     let (pid_resolved, scope_resolved, version_ref): (String, MemoryScope, Option<Arc<RwLock<String>>>) = if let Some(ref sid) = session_id_opt {
-        if let Some(session) = state.sessions.get_session(sid) {
+        if let Some(session) = state.sessions.get_session(&sid) {
             (session.project_id.clone(), session.scope.clone(), Some(session.protocol_version))
         } else {
             warn!("Session {} not found, using path params", sid);
