@@ -37,6 +37,10 @@ struct ServerArgs {
     #[arg(short, long, env = "MCP_STORAGE_ROOT", default_value = "storage")]
     root: String,
 
+    /// HTTP server host
+    #[arg(long, env = "MCP_HTTP_HOST", default_value = "127.0.0.1")]
+    host: String,
+
     /// HTTP server port
     #[arg(short, long, env = "MCP_HTTP_PORT", default_value_t = 3000)]
     port: u16,
@@ -68,6 +72,7 @@ enum Mode {
 struct AppState {
     registry: Arc<GraphRegistry>,
     sessions: Arc<SessionManager>,
+    storage_root: String,
 }
 
 #[tokio::main]
@@ -81,6 +86,7 @@ async fn main() -> anyhow::Result<()> {
 
     let registry = Arc::new(GraphRegistry::new(&args.root));
     let sessions = Arc::new(SessionManager::new());
+    let storage_root = args.root.clone();
 
     // Background saver
     let saver_registry = Arc::clone(&registry);
@@ -93,11 +99,25 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // Background session cleanup
+    let cleanup_sessions = Arc::clone(&sessions);
+    let cleanup_handle = tokio::spawn(async move {
+        let mut interval_timer = tokio::time::interval(Duration::from_secs(300)); // Every 5 mins
+        loop {
+            interval_timer.tick().await;
+            let cleaned = cleanup_sessions.cleanup_inactive(Duration::from_secs(1800)); // 30 mins idle
+            if cleaned > 0 {
+                info!("Cleaned up {} inactive sessions", cleaned);
+            }
+        }
+    });
+
     let mut http_handle = None;
     if args.port > 0 {
         let app_state = Arc::new(AppState {
             registry: Arc::clone(&registry),
             sessions: Arc::clone(&sessions),
+            storage_root: storage_root.clone(),
         });
 
         // Hardened CORS
@@ -117,7 +137,7 @@ async fn main() -> anyhow::Result<()> {
             .layer(cors)
             .with_state(app_state);
 
-        let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", args.port)).await?;
+        let listener = tokio::net::TcpListener::bind(format!("{}:{}", args.host, args.port)).await?;
         info!("HTTP server listening on {}", listener.local_addr()?);
         
         http_handle = Some(tokio::spawn(async move {
@@ -142,7 +162,24 @@ async fn main() -> anyhow::Result<()> {
         loop {
             let mut line = String::new();
             match reader.read_line(&mut line).await {
-                Ok(0) => break, 
+                Ok(0) => {
+                    if args.mode == Mode::Hybrid {
+                        // In hybrid mode, if stdin is closed (e.g. background service), 
+                        // we stay alive for HTTP requests.
+                        debug!("Stdio reach EOF, but keeping HTTP server alive in Hybrid mode");
+                        tokio::select! {
+                            _ = tokio::signal::ctrl_c() => info!("Shutdown signal received"),
+                            _ = async {
+                                if let Some(h) = http_handle {
+                                    let _ = h.await;
+                                }
+                            } => warn!("HTTP server exited unexpectedly"),
+                        }
+                        break;
+                    } else {
+                        break;
+                    }
+                }, 
                 Ok(_) => {
                     let payload: RpcPayload = match serde_json::from_str(&line) {
                         Ok(req) => req,
@@ -151,7 +188,7 @@ async fn main() -> anyhow::Result<()> {
 
                     let graph = registry.get_or_load(&project_id, scope.clone());
                     debug!(project_id, scope = %scope, "Handling stdio request");
-                    let response_val = process_payload(&graph, payload, &project_id, &scope, None).await;
+                    let response_val = process_payload(&graph, payload, &project_id, &scope, None, &storage_root).await;
                     
                     if let Some(res) = response_val {
                         let response_json = serde_json::to_string(&res).unwrap_or_default();
@@ -185,6 +222,7 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Shutting down... Performing final save.");
     saver_handle.abort();
+    cleanup_handle.abort();
     registry.save_all();
     Ok(())
 }
@@ -192,52 +230,77 @@ async fn main() -> anyhow::Result<()> {
 // ==================== Streamable HTTP (2025-11-25) ====================
 
 async fn handle_streamable_get_shared(
+    headers: HeaderMap,
     Path(pid): Path<String>,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    create_streamable_session(pid, MemoryScope::Shared, state).await
+    create_streamable_session(headers, pid, MemoryScope::Shared, state).await
 }
 
 async fn handle_streamable_get_agent(
+    headers: HeaderMap,
     Path((pid, aid)): Path<(String, String)>,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    create_streamable_session(pid, MemoryScope::Agent(aid), state).await
+    create_streamable_session(headers, pid, MemoryScope::Agent(aid), state).await
 }
 
 async fn create_streamable_session(
+    headers: HeaderMap,
     project_id: String,
     scope: MemoryScope,
     state: Arc<AppState>,
 ) -> impl IntoResponse {
     let (session_id, rx) = state.sessions.create_session(project_id.clone(), scope.clone());
-    debug!("New Streamable session created: {} for {} / {}", session_id, project_id, scope);
+    info!("New Streamable session requested: {} for project: {}, scope: {}", session_id, project_id, scope);
 
-    let mut headers = HeaderMap::new();
-    headers.insert("Mcp-Session-Id", session_id.parse().unwrap());
-    headers.insert("Mcp-Protocol-Version", "2025-11-25".parse().unwrap());
+    let mut headers_resp = HeaderMap::new();
+    headers_resp.insert("mcp-session-id", session_id.parse().unwrap());
+    headers_resp.insert("mcp-protocol-version", "2025-11-25".parse().unwrap());
+
+    // Send initial endpoint event to help client discovery (some clients need this even in 2025 version)
+    if let Some(session) = state.sessions.get_session(&session_id) {
+        let host = headers.get("host").and_then(|h| h.to_str().ok()).unwrap_or("127.0.0.1:3000");
+        let base_path = match scope {
+            MemoryScope::Shared => format!("mcp/projects/{}/shared", project_id),
+            MemoryScope::Agent(ref aid) => format!("mcp/projects/{}/agents/{}", project_id, aid),
+        };
+        let endpoint_uri = format!("http://{}/{}?session_id={}", host, base_path, session_id);
+        let event = Event::default().event("endpoint").data(endpoint_uri);
+        let _ = session.sender.send(Ok(event)).await;
+    }
 
     let sse = Sse::new(ReceiverStream::new(rx))
         .keep_alive(axum::response::sse::KeepAlive::default());
-    (headers, sse)
+    (headers_resp, sse)
+}
+
+#[derive(Deserialize)]
+struct PostQuery {
+    session_id: Option<String>,
 }
 
 // Helper for Streamable POST handlers
 async fn handle_streamable_post_logic(
     project_id: String,
     scope: MemoryScope,
+    Query(query): Query<PostQuery>,
     headers: HeaderMap,
     state: Arc<AppState>,
-    payload: RpcPayload,
+    Json(payload): Json<RpcPayload>,
 ) -> impl IntoResponse {
-    debug!("Streamable POST headers: {:?}", headers);
+    let session_id_opt = headers.get("mcp-session-id")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .or(query.session_id);
     
-    let session_id_opt = headers.get("mcp-session-id").and_then(|v| v.to_str().ok());
+    info!("Streamable POST request received. Session: {:?}, Project: {}, Scope: {}", session_id_opt, project_id, scope);
     
-    let (pid_resolved, scope_resolved, version_ref): (String, MemoryScope, Option<Arc<RwLock<String>>>) = if let Some(sid) = session_id_opt {
+    let (pid_resolved, scope_resolved, version_ref): (String, MemoryScope, Option<Arc<RwLock<String>>>) = if let Some(ref sid) = session_id_opt {
         if let Some(session) = state.sessions.get_session(sid) {
             (session.project_id.clone(), session.scope.clone(), Some(session.protocol_version))
         } else {
+            warn!("Session {} not found, using path params", sid);
             (project_id, scope, None) 
         }
     } else {
@@ -245,10 +308,10 @@ async fn handle_streamable_post_logic(
     };
 
     let graph = state.registry.get_or_load(&pid_resolved, scope_resolved.clone());
-    let response_val = process_payload(&graph, payload, &pid_resolved, &scope_resolved, version_ref.clone()).await;
+    let response_val = process_payload(&graph, payload, &pid_resolved, &scope_resolved, version_ref.clone(), &state.storage_root).await;
     
     if let Some(sid) = session_id_opt {
-        if let Some(session) = state.sessions.get_session(sid) {
+        if let Some(session) = state.sessions.get_session(&sid) {
             if let Some(ref res) = response_val {
                 let event = Event::default().data(serde_json::to_string(res).unwrap_or_default());
                 let _ = session.sender.send(Ok::<Event, axum::Error>(event)).await;
@@ -263,7 +326,7 @@ async fn handle_streamable_post_logic(
     };
 
     let mut headers = HeaderMap::new();
-    headers.insert("Mcp-Protocol-Version", version.parse().unwrap());
+    headers.insert("mcp-protocol-version", version.parse().unwrap());
 
     match response_val {
         Some(res) => {
@@ -278,20 +341,22 @@ async fn handle_streamable_post_logic(
 
 async fn handle_streamable_post_shared(
     Path(pid): Path<String>,
+    Query(query): Query<PostQuery>,
     headers: HeaderMap,
     State(state): State<Arc<AppState>>,
     Json(payload): Json<RpcPayload>,
 ) -> impl IntoResponse {
-    handle_streamable_post_logic(pid, MemoryScope::Shared, headers, state, payload).await
+    handle_streamable_post_logic(pid, MemoryScope::Shared, Query(query), headers, state, Json(payload)).await
 }
 
 async fn handle_streamable_post_agent(
     Path((pid, aid)): Path<(String, String)>,
+    Query(query): Query<PostQuery>,
     headers: HeaderMap,
     State(state): State<Arc<AppState>>,
     Json(payload): Json<RpcPayload>,
 ) -> impl IntoResponse {
-    handle_streamable_post_logic(pid, MemoryScope::Agent(aid), headers, state, payload).await
+    handle_streamable_post_logic(pid, MemoryScope::Agent(aid), Query(query), headers, state, Json(payload)).await
 }
 
 
@@ -360,7 +425,7 @@ async fn handle_legacy_message_post(
     };
 
     let graph = state.registry.get_or_load(&project_id, scope.clone());
-    let response_val = process_payload(&graph, payload, &project_id, &scope, version_ref.clone()).await;
+    let response_val = process_payload(&graph, payload, &project_id, &scope, version_ref.clone(), &state.storage_root).await;
     
     if let (Some(session), Some(res)) = (session_opt, response_val.clone()) {
         let event = Event::default().data(serde_json::to_string(&res).unwrap_or_default());
@@ -385,18 +450,19 @@ async fn process_payload(
     project_id: &str,
     scope: &MemoryScope,
     session_version: Option<Arc<RwLock<String>>>,
+    storage_root: &str,
 ) -> Option<Value> {
     match payload {
         RpcPayload::Single(req) => {
             debug!(project_id = %project_id, scope = %scope, method = %req.method, "Handling RPC request");
-            let response = protocol_handle_request(graph, req, session_version).await;
+            let response = protocol_handle_request(graph, req, session_version, storage_root).await;
             response.map(|r| serde_json::to_value(&r).unwrap_or(json!({})))
         }
         RpcPayload::Batch(reqs) => {
             debug!(project_id = %project_id, scope = %scope, batch_size = reqs.len(), "Handling RPC batch request");
             let mut responses = Vec::with_capacity(reqs.len());
             for req in reqs {
-                if let Some(res) = protocol_handle_request(graph, req, session_version.clone()).await {
+                if let Some(res) = protocol_handle_request(graph, req, session_version.clone(), storage_root).await {
                     responses.push(res);
                 }
             }

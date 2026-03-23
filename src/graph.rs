@@ -80,10 +80,11 @@ impl MemoryGraph {
         for relation in relations {
             // Memory optimization: reuse names from existing entities if possible
             // but for simplicity and safety we use the relation as provided
-            if self.entities.contains_key(&relation.from) && self.entities.contains_key(&relation.to) {
-                if self.relations.insert(relation, ()).is_none() {
-                    self.mark_dirty();
-                }
+            if self.entities.contains_key(&relation.from)
+                && self.entities.contains_key(&relation.to)
+                && self.relations.insert(relation, ()).is_none()
+            {
+                self.mark_dirty();
             }
         }
     }

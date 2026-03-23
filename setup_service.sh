@@ -20,8 +20,14 @@ fi
 echo -e "${BLUE}Preparing storage directories...${NC}"
 STORAGE_DIR="$HOME/.mcp-memory"
 mkdir -p "$STORAGE_DIR/storage"
+mkdir -p "$STORAGE_DIR/docs"
 
-# 3. Создание systemd user unit
+# 3. Копирование инструкций (чтобы они были доступны серверу в WorkingDirectory)
+echo -e "${BLUE}Copying guidelines to storage directory...${NC}"
+cp effective_work.md "$STORAGE_DIR/"
+cp docs/AGENT_GUIDELINES.md "$STORAGE_DIR/docs/"
+
+# 4. Создание systemd user unit
 echo -e "${BLUE}Creating systemd service unit...${NC}"
 SERVICE_FILE="$HOME/.config/systemd/user/mcp-memory.service"
 mkdir -p "$(dirname "$SERVICE_FILE")"
@@ -34,7 +40,7 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=$STORAGE_DIR
-ExecStart=$HOME/.cargo/bin/mcp-memory-server-rust --mode http --port 3000 --root $STORAGE_DIR/storage
+ExecStart=$HOME/.cargo/bin/mcp-memory-server-rust --mode hybrid --port 3000 --root $STORAGE_DIR/storage
 Restart=always
 RestartSec=5
 
@@ -42,7 +48,7 @@ RestartSec=5
 WantedBy=default.target
 EOF
 
-# 4. Активация сервиса
+# 5. Активация сервиса
 echo -e "${BLUE}Activating systemd service...${NC}"
 systemctl --user daemon-reload
 systemctl --user enable mcp-memory.service
