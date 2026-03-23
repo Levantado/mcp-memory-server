@@ -87,6 +87,4 @@ async fn test_cors_preflight() {
         .header("Access-Control-Request-Method", "POST")
         .send().await.unwrap();
     assert!(res.headers().get("access-control-allow-origin").is_none());
-
-    server.kill().await.unwrap();
 }

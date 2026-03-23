@@ -13,6 +13,18 @@ pub struct TestEnv {
     pub docs_path: PathBuf,
 }
 
+pub struct TestServer {
+    child: Child,
+}
+
+impl Drop for TestServer {
+    fn drop(&mut self) {
+        // Force kill the process when the struct goes out of scope (e.g., end of test or panic)
+        let _ = self.child.start_kill();
+        let _ = self.child.wait(); // Wait for it to actually die
+    }
+}
+
 impl TestEnv {
     pub fn new() -> Self {
         let temp_dir = TempDir::new().unwrap();
@@ -39,7 +51,7 @@ impl TestEnv {
         listener.local_addr().unwrap().port()
     }
 
-    pub async fn start_server(&self, port: u16, api_key: Option<&str>) -> Child {
+    pub async fn start_server(&self, port: u16, api_key: Option<&str>) -> TestServer {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_mcp-memory-server-rust"));
         
         cmd.arg("--mode").arg("hybrid")
@@ -66,6 +78,6 @@ impl TestEnv {
             panic!("Server died immediately with status: {}", status);
         }
 
-        child
+        TestServer { child }
     }
 }

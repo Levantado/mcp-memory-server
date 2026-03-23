@@ -37,15 +37,12 @@ async fn test_persistence_restart() {
         
         // Wait for background save (interval is 1s)
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-        
-        server.kill().await.unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    }
+        }
 
-    // 2. Restart server and verify data
-    {
-        let mut server = env.start_server(port, None).await;
-        
+        // 2. Restart server and verify data
+        {
+        let _server = env.start_server(port, None).await;
+
         let res = client.get(&url).send().await.unwrap();
         let sid = res.headers().get("mcp-session-id").unwrap().to_str().unwrap().to_string();
 
@@ -55,12 +52,10 @@ async fn test_persistence_restart() {
         });
         let res = client.post(format!("{}?session_id={}", url, sid)).json(&payload).send().await.unwrap();
         let body: serde_json::Value = res.json().await.unwrap();
-        
+
         let text = body["result"]["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("Permanent"), "Expected 'Permanent' in response, got: {}", text);
-        
-        server.kill().await.unwrap();
-    }
+        }
 }
 
 #[tokio::test]

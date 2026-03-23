@@ -5,6 +5,10 @@ edition = "2021"
 authors = ["Senior Staff Rust Engineer"]
 description = "High-performance MCP Memory Server implementation in Rust"
 
+[[bin]]
+name = "benchmark"
+path = "src/bin/benchmark.rs"
+
 [dependencies]
 # Async runtime
 tokio = { version = "1.43", features = ["full"] }
@@ -28,6 +32,9 @@ anyhow = "1.0"
 
 # Async support for traits
 async-trait = "0.1"
+
+# HTTP Client for benchmarking
+reqwest = { version = "0.12", features = ["json", "stream"] }
 
 # Logging & Observability
 tracing = "0.1"

@@ -58,6 +58,4 @@ async fn test_cleanup_lifecycle() {
     // 2. Wait for background cleanup (we configured it for 30 mins in code, but let's assume we want to test the logic)
     // To properly test this, we should have made the timeout configurable. 
     // Since it is hardcoded to 30 mins, we can't easily test it in a fast integration test without refactoring.
-    
-    server.kill().await.unwrap();
 }
