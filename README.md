@@ -56,6 +56,15 @@ A high-performance implementation of the **Model Context Protocol (MCP)** Knowle
 - **Http:** Network-only mode for remote agents.
 - **Stdio:** Standard mode for local integration.
 
+## 🧪 Testing
+The project includes a comprehensive test suite (Unit + Integration).
+
+Run tests:
+```bash
+cargo nextest run --all-targets
+```
+*Note: Integration tests spawn a real server instance and require permissions to bind to local TCP ports.*
+
 ## 📊 Performance
 The server includes a comprehensive stress test suite. In our benchmarks, it handles **4000+ RPS** with **sub-5ms** average latency on standard hardware.
 
