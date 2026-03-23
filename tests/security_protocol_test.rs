@@ -68,7 +68,7 @@ async fn test_cors_preflight() {
        .arg("--cors-allowed-origins").arg("https://trusted.com,http://localhost:8080");
     
     cmd.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
-    let mut server = cmd.spawn().unwrap();
+    let _server = cmd.spawn().unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     let client = Client::new();

@@ -10,16 +10,8 @@ async fn test_persistence_restart() {
 
     // 1. Start server and write data
     {
-        // Start with 1s save interval
-        let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_mcp-memory-server-rust"));
-        cmd.arg("--mode").arg("http")
-           .arg("--port").arg(port.to_string())
-           .arg("--root").arg(env.storage_path.to_str().unwrap())
-           .arg("--interval").arg("1");
-        cmd.env_remove("MCP_API_KEY");
-        cmd.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
-        let mut server = cmd.spawn().unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        // Start with 1s save interval using our robust helper
+        let _server = env.start_server_with_args(port, None, vec!["--interval", "1"]).await;
         
         let res = client.get(&url).send().await.unwrap();
         let sid = res.headers().get("mcp-session-id").unwrap().to_str().unwrap().to_string();
@@ -37,12 +29,16 @@ async fn test_persistence_restart() {
         
         // Wait for background save (interval is 1s)
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-        }
+        // _server is dropped here and killed
+    }
 
-        // 2. Restart server and verify data
-        {
+    // Give OS time to free port
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+    // 2. Restart server and verify data
+    {
         let _server = env.start_server(port, None).await;
-
+        
         let res = client.get(&url).send().await.unwrap();
         let sid = res.headers().get("mcp-session-id").unwrap().to_str().unwrap().to_string();
 
@@ -52,10 +48,10 @@ async fn test_persistence_restart() {
         });
         let res = client.post(format!("{}?session_id={}", url, sid)).json(&payload).send().await.unwrap();
         let body: serde_json::Value = res.json().await.unwrap();
-
-        let text = body["result"]["content"][0]["text"].as_str().unwrap();
+        
+        let text = body["result"]["content"][0]["text"].as_str().unwrap_or_else(|| panic!("Body was: {}", body));
         assert!(text.contains("Permanent"), "Expected 'Permanent' in response, got: {}", text);
-        }
+    }
 }
 
 #[tokio::test]

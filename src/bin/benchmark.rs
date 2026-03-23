@@ -2,7 +2,6 @@ use reqwest::{Client, header};
 use serde_json::json;
 use std::env;
 use std::time::{Duration, Instant};
-use tokio::time::sleep;
 
 const CONCURRENT_AGENTS: usize = 20;
 const REQUESTS_PER_AGENT: usize = 100;

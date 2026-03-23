@@ -19,9 +19,7 @@ pub struct TestServer {
 
 impl Drop for TestServer {
     fn drop(&mut self) {
-        // Force kill the process when the struct goes out of scope (e.g., end of test or panic)
         let _ = self.child.start_kill();
-        let _ = self.child.wait(); // Wait for it to actually die
     }
 }
 
@@ -35,7 +33,6 @@ impl TestEnv {
         fs::create_dir_all(storage_path.join("dummy_project")).unwrap();
         fs::create_dir_all(&docs_path).unwrap();
         
-        // Create dummy guidelines
         fs::write(docs_path.join("effective_work.md"), "test policy").unwrap();
         fs::write(docs_path.join("AGENT_GUIDELINES.md"), "test guidelines").unwrap();
         
@@ -52,6 +49,10 @@ impl TestEnv {
     }
 
     pub async fn start_server(&self, port: u16, api_key: Option<&str>) -> TestServer {
+        self.start_server_with_args(port, api_key, vec![]).await
+    }
+
+    pub async fn start_server_with_args(&self, port: u16, api_key: Option<&str>, extra_args: Vec<&str>) -> TestServer {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_mcp-memory-server-rust"));
         
         cmd.arg("--mode").arg("hybrid")
@@ -59,11 +60,14 @@ impl TestEnv {
            .arg("--root").arg(self.storage_path.to_str().unwrap())
            .arg("--docs-dir").arg(self.docs_path.to_str().unwrap());
 
-        // Clear inherited env var to prevent accidental auth activation
         cmd.env_remove("MCP_API_KEY");
 
         if let Some(key) = api_key {
             cmd.arg("--api-key").arg(key);
+        }
+
+        for arg in extra_args {
+            cmd.arg(arg);
         }
 
         cmd.stdout(Stdio::null())
@@ -71,11 +75,10 @@ impl TestEnv {
 
         let mut child = cmd.spawn().expect("Failed to start server");
         
-        // Wait for server to boot
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        tokio::time::sleep(Duration::from_millis(600)).await;
         
         if let Ok(Some(status)) = child.try_wait() {
-            panic!("Server died immediately with status: {}", status);
+            panic!("Server died immediately with status: {}. Check if all required args are provided.", status);
         }
 
         TestServer { child }
